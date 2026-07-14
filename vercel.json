@@ -1,0 +1,12 @@
+{
+  "framework": null,
+  "buildCommand": "pip install -r requirements.txt",
+  "outputDirectory": ".",
+  "installCommand": "pip install -r requirements.txt",
+  "regions": ["jnb"],
+  "functions": {
+    "app.py": {
+      "runtime": "python3.11"
+    }
+  }
+}

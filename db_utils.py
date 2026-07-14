@@ -1,137 +1,238 @@
 """
-Database utilities for Product Price Matcher v2
+Database utilities for Product Price Matcher v2.
+Uses Turso (libsql) if TURSO_AUTH_TOKEN is set, else local SQLite.
+Table names are prefixed with 'pm_' to coexist with other apps in the same DB.
 """
 import sqlite3
 import os
 from contextlib import contextmanager
+from urllib.parse import urlparse
 from typing import Dict, List, Any, Optional
 
-DB_NAME = "product_matcher.db"
+USE_TURSO = bool(os.environ.get('TURSO_AUTH_TOKEN'))
 
-def get_db_path():
-    """Use DATA_DIR if set (Render persistent disk), otherwise cwd."""
-    data_dir = os.environ.get('DATA_DIR', os.getcwd())
-    return os.path.join(data_dir, DB_NAME)
+if USE_TURSO:
+    import httpx
+    from urllib.parse import urlparse
 
-@contextmanager
-def get_db_connection():
-    """Context manager for database connections"""
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+    TURSO_DB_URL = os.environ['TURSO_DB_URL']
+    TURSO_AUTH_TOKEN = os.environ['TURSO_AUTH_TOKEN']
+    _parsed = urlparse(TURSO_DB_URL)
+    _http_url = f'https://{_parsed.netloc}/v2/pipeline'
+    _headers = {'Authorization': f'Bearer {TURSO_AUTH_TOKEN}'}
+
+    class Row:
+        """Dict-like row that also supports positional indexing (row[0], row['col'])."""
+        def __init__(self, data: dict):
+            self._data = data
+            self._vals = list(data.values())
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                return self._vals[key]
+            return self._data[key]
+        def __getattr__(self, key):
+            return self._data.get(key)
+        def keys(self):
+            return self._data.keys()
+        def values(self):
+            return self._data.values()
+        def items(self):
+            return self._data.items()
+        def __len__(self):
+            return len(self._vals)
+        def __iter__(self):
+            return iter(self._vals)
+
+    class TursoResult:
+        """Wraps a libsql HTTP /pipeline response as a dict-accessible result."""
+        def __init__(self, resp_data):
+            self._data = resp_data
+            results = resp_data.get('results', [])
+            self._result = results[0] if results else {}
+            rows_data = self._result.get('response', {}).get('result', {}).get('rows', [])
+            self._rows = []
+            cols = self._result.get('response', {}).get('result', {}).get('cols', [])
+            for row in rows_data:
+                d = {}
+                for i, col in enumerate(cols):
+                    val = row[i]['value'] if isinstance(row[i], dict) else row[i]
+                    d[col['name']] = val
+                self._rows.append(Row(d))
+
+        def fetchall(self):
+            return self._rows
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        @property
+        def columns(self):
+            return [c['name'] for c in self._result.get('response', {}).get('result', {}).get('cols', [])]
+
+    @contextmanager
+    def get_db_connection():
+        """Context manager using Turso HTTP API (no WebSocket required)."""
+        with httpx.Client(base_url=f'https://{_parsed.netloc}', headers=_headers, timeout=30.0) as client:
+            baton = [None]  # mutable holder for transaction baton
+
+            def execute(sql, params=None):
+                params = list(params) if params else []
+                def _arg(p):
+                    if p is None: return {'type': 'null', 'value': None}
+                    if isinstance(p, int): return {'type': 'integer', 'value': p}
+                    if isinstance(p, float): return {'type': 'real', 'value': p}
+                    return {'type': 'text', 'value': str(p)}
+                payload = {
+                    'requests': [{
+                        'type': 'execute',
+                        'stmt': {'sql': sql, 'args': [_arg(p) for p in params]}
+                    }]
+                }
+                if baton[0]:
+                    payload['baton'] = baton[0]
+                resp = client.post('/v2/pipeline', json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                baton[0] = data.get('baton')
+                return TursoResult(data)
+
+            yield _TursoConn(execute)
+            baton[0] = None
+
+    class _TursoConn:
+        """Connection-like object returned by get_db_connection."""
+        def __init__(self, execute_fn):
+            self._execute = execute_fn
+        def execute(self, sql, params=None):
+            return self._execute(sql, params)
+        def cursor(self):
+            return self  # _TursoConn already has execute + fetchall/fetchone
+        def commit(self):
+            pass  # autocommit
+        def close(self):
+            pass
+
+else:
+    DB_NAME = 'product_matcher'
+
+    def get_db_path():
+        data_dir = os.environ.get('DATA_DIR', os.getcwd())
+        return os.path.join(data_dir, f'{DB_NAME}.db')
+
+    @contextmanager
+    def get_db_connection():
+        conn = sqlite3.connect(get_db_path())
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+        finally:
+            conn.close()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCHEMA INIT
 # ─────────────────────────────────────────────────────────────────────────────
 
+_T = 'pm_'  # table name prefix
+
+SCHEMA_SQL = f"""
+CREATE TABLE IF NOT EXISTS {_T}products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    handle_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT,
+    collection TEXT,
+    base_price REAL NOT NULL DEFAULT 0.0,
+    weight REAL,
+    cost_of_goods REAL,
+    brand TEXT,
+    track_inventory INTEGER DEFAULT 0,
+    inventory INTEGER,
+    done INTEGER DEFAULT 0,
+    visible TEXT DEFAULT 'true',
+    product_image_url TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+
+CREATE TABLE IF NOT EXISTS {_T}variants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL,
+    sku TEXT NOT NULL UNIQUE,
+    surcharge REAL DEFAULT 0.0,
+    weight REAL,
+    visible TEXT DEFAULT 'true',
+    discountable INTEGER DEFAULT 1,
+    track_inventory INTEGER DEFAULT 0,
+    inventory INTEGER,
+    excluded_from_export INTEGER DEFAULT 0,
+    option_1_name TEXT,
+    option_1_value TEXT,
+    option_2_name TEXT,
+    option_2_value TEXT,
+    option_3_name TEXT,
+    option_3_value TEXT,
+    option_4_name TEXT,
+    option_4_value TEXT,
+    option_5_name TEXT,
+    option_5_value TEXT,
+    option_6_name TEXT,
+    option_6_value TEXT,
+    done INTEGER DEFAULT 0,
+    match_status TEXT DEFAULT 'unmatched',
+    matched_rrp_id INTEGER,
+    trust_score REAL DEFAULT 0.0,
+    ribbon_status TEXT DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (product_id) REFERENCES {_T}products(id)
+)
+
+CREATE TABLE IF NOT EXISTS {_T}reference_prices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku TEXT NOT NULL UNIQUE,
+    rrp REAL NOT NULL,
+    source_file TEXT,
+    rrp_description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+
+CREATE TABLE IF NOT EXISTS {_T}price_comparisons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    variant_id INTEGER NOT NULL,
+    site_name TEXT NOT NULL,
+    external_price REAL,
+    external_url TEXT,
+    external_product_name TEXT,
+    availability TEXT,
+    scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (variant_id) REFERENCES {_T}variants(id)
+)
+
+CREATE INDEX IF NOT EXISTS idx_pm_variants_sku ON {_T}variants(sku)
+CREATE INDEX IF NOT EXISTS idx_pm_variants_product_id ON {_T}variants(product_id)
+CREATE INDEX IF NOT EXISTS idx_pm_reference_prices_sku ON {_T}reference_prices(sku)
+CREATE INDEX IF NOT EXISTS idx_pm_variants_match_status ON {_T}variants(match_status)
+"""
+
 def init_database():
-    """Initialize database with all required tables and columns"""
+    import re
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS products (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                handle_id TEXT NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                description TEXT,
-                collection TEXT,
-                base_price REAL NOT NULL DEFAULT 0.0,
-                weight REAL,
-                cost_of_goods REAL,
-                brand TEXT,
-                track_inventory INTEGER DEFAULT 0,
-                inventory INTEGER,
-                done INTEGER DEFAULT 0,
-                visible TEXT DEFAULT 'true',
-                product_image_url TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS variants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_id INTEGER NOT NULL,
-                sku TEXT NOT NULL UNIQUE,
-                surcharge REAL DEFAULT 0.0,
-                weight REAL,
-                visible TEXT DEFAULT 'true',
-                discountable INTEGER DEFAULT 1,
-                track_inventory INTEGER DEFAULT 0,
-                inventory INTEGER,
-                excluded_from_export INTEGER DEFAULT 0,
-                option_1_name TEXT,
-                option_1_value TEXT,
-                option_2_name TEXT,
-                option_2_value TEXT,
-                option_3_name TEXT,
-                option_3_value TEXT,
-                option_4_name TEXT,
-                option_4_value TEXT,
-                option_5_name TEXT,
-                option_5_value TEXT,
-                option_6_name TEXT,
-                option_6_value TEXT,
-                done INTEGER DEFAULT 0,
-                -- NEW FIELDS for v2 matching
-                match_status TEXT DEFAULT 'unmatched',
-                matched_rrp_id INTEGER,
-                trust_score REAL DEFAULT 0.0,
-                ribbon_status TEXT DEFAULT 'active',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (product_id) REFERENCES products(id)
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS reference_prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                sku TEXT NOT NULL UNIQUE,
-                rrp REAL NOT NULL,
-                source_file TEXT,
-                rrp_description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS price_comparisons (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                variant_id INTEGER NOT NULL,
-                site_name TEXT NOT NULL,
-                external_price REAL,
-                external_url TEXT,
-                external_product_name TEXT,
-                availability TEXT,
-                scraped_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (variant_id) REFERENCES variants(id)
-            )
-        """)
-
-        # Indexes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_variants_sku ON variants(sku)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_variants_product_id ON variants(product_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_reference_prices_sku ON reference_prices(sku)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_variants_match_status ON variants(match_status)")
-
+        for stmt in re.split(r'\n(?=CREATE )', SCHEMA_SQL.strip()):
+            stmt = stmt.strip()
+            if stmt:
+                conn.execute(stmt)
         conn.commit()
-    print("[db] Database initialised")
+    print("[db] Database initialised (Turso)" if USE_TURSO else "[db] Database initialised (SQLite)")
 
 def clear_database():
     """Clear all data"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM price_comparisons")
-        cursor.execute("DELETE FROM variants")
-        cursor.execute("DELETE FROM products")
-        cursor.execute("DELETE FROM reference_prices")
+        cursor.execute("DELETE FROM pm_price_comparisons")
+        cursor.execute("DELETE FROM pm_variants")
+        cursor.execute("DELETE FROM pm_products")
+        cursor.execute("DELETE FROM pm_reference_prices")
         conn.commit()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -142,20 +243,20 @@ def get_database_stats() -> Dict[str, int]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         return {
-            'products': cursor.execute("SELECT COUNT(*) FROM products").fetchone()[0],
-            'variants': cursor.execute("SELECT COUNT(*) FROM variants").fetchone()[0],
-            'reference_prices': cursor.execute("SELECT COUNT(*) FROM reference_prices").fetchone()[0],
+            'products': cursor.execute("SELECT COUNT(*) FROM pm_products").fetchone()[0],
+            'variants': cursor.execute("SELECT COUNT(*) FROM pm_variants").fetchone()[0],
+            'reference_prices': cursor.execute("SELECT COUNT(*) FROM pm_reference_prices").fetchone()[0],
         }
 
 def get_matching_stats() -> Dict[str, Any]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        total = cursor.execute("SELECT COUNT(*) FROM variants").fetchone()[0]
-        matched = cursor.execute("SELECT COUNT(*) FROM variants WHERE match_status IN ('guaranteed','user_approved')").fetchone()[0]
-        believed = cursor.execute("SELECT COUNT(*) FROM variants WHERE match_status = 'believed'").fetchone()[0]
-        unmatched = cursor.execute("SELECT COUNT(*) FROM variants WHERE match_status = 'unmatched'").fetchone()[0]
-        total_rrp = cursor.execute("SELECT COUNT(*) FROM reference_prices").fetchone()[0]
-        matched_rrp = cursor.execute("SELECT COUNT(*) FROM reference_prices WHERE id IN (SELECT DISTINCT matched_rrp_id FROM variants WHERE matched_rrp_id IS NOT NULL)").fetchone()[0]
+        total = cursor.execute("SELECT COUNT(*) FROM pm_variants").fetchone()[0]
+        matched = cursor.execute("SELECT COUNT(*) FROM pm_variants WHERE match_status IN ('guaranteed','user_approved')").fetchone()[0]
+        believed = cursor.execute("SELECT COUNT(*) FROM pm_variants WHERE match_status = 'believed'").fetchone()[0]
+        unmatched = cursor.execute("SELECT COUNT(*) FROM pm_variants WHERE match_status = 'unmatched'").fetchone()[0]
+        total_rrp = cursor.execute("SELECT COUNT(*) FROM pm_reference_prices").fetchone()[0]
+        matched_rrp = cursor.execute("SELECT COUNT(*) FROM pm_reference_prices WHERE id IN (SELECT DISTINCT matched_rrp_id FROM pm_variants WHERE matched_rrp_id IS NOT NULL)").fetchone()[0]
         return {
             'total_variants': total,
             'guaranteed': matched,
@@ -180,8 +281,8 @@ def get_all_products() -> List[Dict]:
                    SUM(CASE WHEN v.match_status IN ('guaranteed','user_approved') THEN 1 ELSE 0 END) as matched_variants,
                    SUM(CASE WHEN v.match_status = 'believed' THEN 1 ELSE 0 END) as believed_variants,
                    SUM(CASE WHEN v.done = 1 THEN 1 ELSE 0 END) as done_variants
-            FROM products p
-            LEFT JOIN variants v ON p.id = v.product_id
+            FROM pm_products p
+            LEFT JOIN pm_variants v ON p.id = v.product_id
             GROUP BY p.id
             ORDER BY p.name
         """)
@@ -190,7 +291,7 @@ def get_all_products() -> List[Dict]:
 def get_product_by_id(product_id: int) -> Optional[Dict]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+        cursor.execute("SELECT * FROM pm_products WHERE id = ?", (product_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -199,8 +300,8 @@ def get_variants_for_product(product_id: int) -> List[Dict]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT v.*, rp.rrp as reference_price, rp.id as rrp_id
-            FROM variants v
-            LEFT JOIN reference_prices rp ON v.matched_rrp_id = rp.id
+            FROM pm_variants v
+            LEFT JOIN pm_reference_prices rp ON v.matched_rrp_id = rp.id
             WHERE v.product_id = ?
             ORDER BY v.sku
         """, (product_id,))
@@ -210,7 +311,7 @@ def update_variant_surcharge(variant_id: int, surcharge: float) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE variants SET surcharge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE pm_variants SET surcharge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (surcharge, variant_id)
         )
         conn.commit()
@@ -220,7 +321,7 @@ def update_variant_ribbon(variant_id: int, ribbon_status: str) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE variants SET ribbon_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE pm_variants SET ribbon_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (ribbon_status, variant_id)
         )
         conn.commit()
@@ -230,7 +331,7 @@ def update_variant_match_status(variant_id: int, match_status: str, matched_rrp_
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            UPDATE variants
+            UPDATE pm_variants
             SET match_status = ?, matched_rrp_id = ?, trust_score = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
         """, (match_status, matched_rrp_id, trust_score, variant_id))
@@ -241,7 +342,7 @@ def mark_variant_done(variant_id: int, done: bool) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE variants SET done = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE pm_variants SET done = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (1 if done else 0, variant_id)
         )
         conn.commit()
@@ -251,7 +352,7 @@ def mark_all_variants_done(product_id: int, done: bool) -> int:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "UPDATE variants SET done = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?",
+            "UPDATE pm_variants SET done = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?",
             (1 if done else 0, product_id)
         )
         conn.commit()
@@ -264,15 +365,15 @@ def mark_all_variants_done(product_id: int, done: bool) -> int:
 def get_all_reference_prices() -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM reference_prices ORDER BY sku")
+        cursor.execute("SELECT * FROM pm_reference_prices ORDER BY sku")
         return [dict(row) for row in cursor.fetchall()]
 
 def get_unmatched_reference_prices() -> List[Dict]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT rp.* FROM reference_prices rp
-            LEFT JOIN variants v ON v.matched_rrp_id = rp.id
+            SELECT rp.* FROM pm_reference_prices rp
+            LEFT JOIN pm_variants v ON v.matched_rrp_id = rp.id
             WHERE v.id IS NULL
             ORDER BY rp.sku
         """)
@@ -284,8 +385,8 @@ def search_variants(query: str, limit: int = 100) -> List[Dict]:
         q = f"%{query}%"
         cursor.execute("""
             SELECT v.*, p.name as product_name, p.base_price
-            FROM variants v
-            JOIN products p ON v.product_id = p.id
+            FROM pm_variants v
+            JOIN pm_products p ON v.product_id = p.id
             WHERE v.sku LIKE ? OR p.name LIKE ?
             ORDER BY p.name
             LIMIT ?
@@ -304,15 +405,15 @@ def bulk_apply_surcharges(product_id: int) -> Dict[str, int]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT v.id, v.surcharge, rp.rrp, p.base_price
-            FROM variants v
-            JOIN products p ON v.product_id = p.id
-            LEFT JOIN reference_prices rp ON v.matched_rrp_id = rp.id
+            FROM pm_variants v
+            JOIN pm_products p ON v.product_id = p.id
+            LEFT JOIN pm_reference_prices rp ON v.matched_rrp_id = rp.id
             WHERE v.product_id = ? AND rp.rrp IS NOT NULL
         """, (product_id,))
         for row in cursor.fetchall():
             required = row['rrp'] - row['base_price']
             cursor.execute(
-                "UPDATE variants SET surcharge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE pm_variants SET surcharge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (required, row['id'])
             )
             updated += 1
@@ -326,15 +427,15 @@ def bulk_apply_all_surcharges() -> Dict[str, int]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT v.id, rp.rrp, p.base_price
-            FROM variants v
-            JOIN products p ON v.product_id = p.id
-            JOIN reference_prices rp ON v.matched_rrp_id = rp.id
+            FROM pm_variants v
+            JOIN pm_products p ON v.product_id = p.id
+            JOIN pm_reference_prices rp ON v.matched_rrp_id = rp.id
             WHERE rp.rrp IS NOT NULL
         """)
         for row in cursor.fetchall():
             required = row['rrp'] - row['base_price']
             cursor.execute(
-                "UPDATE variants SET surcharge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE pm_variants SET surcharge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (required, row['id'])
             )
             updated += 1
@@ -345,7 +446,7 @@ def get_all_collections() -> List[str]:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT DISTINCT collection FROM products
+            SELECT DISTINCT collection FROM pm_products
             WHERE collection IS NOT NULL AND collection != ''
             ORDER BY collection
         """)
@@ -367,9 +468,9 @@ def get_product_cards(
         cursor = conn.cursor()
 
         base_query = """
-            FROM products p
-            LEFT JOIN variants v ON p.id = v.product_id
-            LEFT JOIN reference_prices rp ON v.matched_rrp_id = rp.id
+            FROM pm_products p
+            LEFT JOIN pm_variants v ON p.id = v.product_id
+            LEFT JOIN pm_reference_prices rp ON v.matched_rrp_id = rp.id
             WHERE 1=1
         """
         params = []
@@ -424,7 +525,7 @@ def get_product_card_detail(product_id: int) -> Optional[Dict]:
     """Get full product detail with all variants for a card"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        product = cursor.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+        product = cursor.execute("SELECT * FROM pm_products WHERE id = ?", (product_id,)).fetchone()
         if not product:
             return None
         variants = get_variants_for_product(product_id)
@@ -449,8 +550,8 @@ def get_export_data() -> List[Dict]:
                    v.option_2_name, v.option_2_value,
                    v.option_3_name, v.option_3_value,
                    v.ribbon_status, v.done
-            FROM products p
-            LEFT JOIN variants v ON p.id = v.product_id
+            FROM pm_products p
+            LEFT JOIN pm_variants v ON p.id = v.product_id
             ORDER BY p.id, v.id
         """)
         return [dict(row) for row in cursor.fetchall()]
