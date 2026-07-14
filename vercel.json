@@ -1,12 +1,9 @@
 {
-  "framework": null,
-  "buildCommand": "pip install -r requirements.txt",
-  "outputDirectory": ".",
-  "installCommand": "pip install -r requirements.txt",
-  "regions": ["iad1"],
-  "functions": {
-    "app.py": {
-      "runtime": "python3.11"
-    }
-  }
+  "version": 2,
+  "builds": [
+    { "src": "app.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "app.py" }
+  ]
 }
