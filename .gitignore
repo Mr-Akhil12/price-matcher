@@ -9,3 +9,4 @@ cache/
 exports/
 *.csv
 .DS_Store
+.vercel

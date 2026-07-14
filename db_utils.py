@@ -22,10 +22,20 @@ if USE_TURSO:
     _headers = {'Authorization': f'Bearer {TURSO_AUTH_TOKEN}'}
 
     class Row:
-        """Dict-like row that also supports positional indexing (row[0], row['col'])."""
+        """Dict-like row that also supports positional indexing (row[0], row['col']).
+        Values are coerced to proper Python types."""
         def __init__(self, data: dict):
-            self._data = data
-            self._vals = list(data.values())
+            self._data = {}
+            self._vals = []
+            for k, v in data.items():
+                if isinstance(v, dict) and v.get('type') == 'integer':
+                    v = int(v['value'])
+                elif isinstance(v, dict) and v.get('type') == 'real':
+                    v = float(v['value'])
+                elif isinstance(v, dict) and v.get('type') == 'null':
+                    v = None
+                self._data[k] = v
+                self._vals.append(v)
         def __getitem__(self, key):
             if isinstance(key, int):
                 return self._vals[key]
@@ -55,8 +65,16 @@ if USE_TURSO:
             for row in rows_data:
                 d = {}
                 for i, col in enumerate(cols):
-                    val = row[i]['value'] if isinstance(row[i], dict) else row[i]
-                    d[col['name']] = val
+                    v = row[i]
+                    if isinstance(v, dict):
+                        t = v.get('type', 'text')
+                        rv = v.get('value')
+                        if t == 'integer': rv = int(rv) if rv is not None else None
+                        elif t == 'real': rv = float(rv) if rv is not None else None
+                        elif t == 'null': rv = None
+                        d[col['name']] = rv
+                    else:
+                        d[col['name']] = v
                 self._rows.append(Row(d))
 
         def fetchall(self):
