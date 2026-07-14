@@ -24,7 +24,7 @@ from db_utils import (
 from matching_engine import run_full_match
 from importers import import_catalog_csv, import_rrp_xlsx, import_rrp_csv
 
-DATA_DIR = os.environ.get('DATA_DIR', '.')
+DATA_DIR = os.environ.get('DATA_DIR', '/tmp' if os.environ.get('VERCEL') else '.')
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-' + str(uuid.uuid4()))
