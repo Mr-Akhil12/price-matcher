@@ -3,7 +3,7 @@
   "buildCommand": "pip install -r requirements.txt",
   "outputDirectory": ".",
   "installCommand": "pip install -r requirements.txt",
-  "regions": ["jnb"],
+  "regions": ["iad1"],
   "functions": {
     "app.py": {
       "runtime": "python3.11"
