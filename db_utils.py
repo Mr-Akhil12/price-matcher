@@ -23,35 +23,40 @@ if USE_TURSO:
 
     class Row:
         """Dict-like row that also supports positional indexing (row[0], row['col']).
-        Values are coerced to proper Python types."""
+        Values are coerced to proper Python types. Implements Mapping so dict(row) works."""
         def __init__(self, data: dict):
             self._data = {}
             self._vals = []
             for k, v in data.items():
-                if isinstance(v, dict) and v.get('type') == 'integer':
-                    v = int(v['value'])
-                elif isinstance(v, dict) and v.get('type') == 'real':
-                    v = float(v['value'])
-                elif isinstance(v, dict) and v.get('type') == 'null':
-                    v = None
+                if isinstance(v, dict):
+                    t = v.get('type', 'text')
+                    rv = v.get('value')
+                    if t == 'integer': rv = int(rv) if rv is not None else None
+                    elif t == 'real': rv = float(rv) if rv is not None else None
+                    elif t == 'null': rv = None
+                    v = rv
                 self._data[k] = v
                 self._vals.append(v)
+
         def __getitem__(self, key):
             if isinstance(key, int):
                 return self._vals[key]
             return self._data[key]
+
         def __getattr__(self, key):
             return self._data.get(key)
+
         def keys(self):
             return self._data.keys()
-        def values(self):
-            return self._data.values()
-        def items(self):
-            return self._data.items()
+
         def __len__(self):
             return len(self._vals)
+
         def __iter__(self):
             return iter(self._vals)
+
+        def __repr__(self):
+            return f'<Row {self._data}>'
 
     class TursoResult:
         """Wraps a libsql HTTP /pipeline response as a dict-accessible result."""
@@ -97,8 +102,9 @@ if USE_TURSO:
                 params = list(params) if params else []
                 def _arg(p):
                     if p is None: return {'type': 'null', 'value': None}
-                    if isinstance(p, int): return {'type': 'integer', 'value': p}
-                    if isinstance(p, float): return {'type': 'real', 'value': p}
+                    if isinstance(p, bool): return {'type': 'integer', 'value': '1' if p else '0'}
+                    if isinstance(p, int): return {'type': 'integer', 'value': str(p)}
+                    if isinstance(p, float): return {'type': 'real', 'value': str(p)}
                     return {'type': 'text', 'value': str(p)}
                 payload = {
                     'requests': [{
@@ -118,15 +124,29 @@ if USE_TURSO:
             baton[0] = None
 
     class _TursoConn:
-        """Connection-like object returned by get_db_connection."""
+        """Connection-like object returned by get_db_connection.
+        execute() stores the result; fetchall()/fetchone() return it.
+        cursor() returns self so both conn.execute() and cursor.execute() work."""
         def __init__(self, execute_fn):
             self._execute = execute_fn
+            self._last_result = None
+
         def execute(self, sql, params=None):
-            return self._execute(sql, params)
+            self._last_result = self._execute(sql, params)
+            return self
+
         def cursor(self):
-            return self  # _TursoConn already has execute + fetchall/fetchone
+            return self
+
+        def fetchall(self):
+            return self._last_result.fetchall() if self._last_result else []
+
+        def fetchone(self):
+            return self._last_result.fetchone() if self._last_result else None
+
         def commit(self):
             pass  # autocommit
+
         def close(self):
             pass
 
