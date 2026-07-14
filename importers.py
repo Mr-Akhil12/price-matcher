@@ -233,45 +233,30 @@ def import_catalog_csv(filepath: str) -> Dict[str, Any]:
 def import_rrp_xlsx(filepath: str) -> Dict[str, Any]:
     """
     Import Core Group Apple Reseller Program XLSX.
-    Format: SKU | Description | Status (ribbon) | RRP ZAR
-    Header row detected dynamically (skip leading text rows).
+    Format: Col 0 = SKU, Col 1 = Description, Col 2 = Status, Col 4 = RRP.
+    Header row is detected dynamically (file has multi-row merged header).
     """
-    df_raw = pd.read_excel(filepath, header=None)
+    df_raw = pd.read_excel(filepath, header=None, dtype=str, keep_default_na=False)
 
-    # Find the header row — look for 'RRP' text in column 3
-    header_row = 0
+    # Find header row — look for first row where col 3 has a valid RRP (numeric string)
+    header_row = None
     for i, row in df_raw.iterrows():
-        row_vals = [str(v).strip() for v in row.values if pd.notna(v)]
-        if any('rrp' in v.lower() for v in row_vals):
-            header_row = i
-            break
+        sku = row.iloc[0].strip() if row.iloc[0] else ''
+        rrp_raw = row.iloc[3].strip() if len(row) > 3 and row.iloc[3] else ''
+        if rrp_raw and rrp_raw not in ('nan', 'none', ''):
+            try:
+                float(rrp_raw.replace(',', ''))
+                header_row = i
+                break
+            except (ValueError, AttributeError):
+                continue
 
+    if header_row is None:
+        return {'error': 'Could not find RRP column header row', 'imported': 0, 'skipped': 0, 'errors': 0}
+
+    # Re-read with detected header row
     df = pd.read_excel(filepath, header=header_row)
     df.columns = [str(c).strip() for c in df.columns]
-
-    # Rename columns based on what we found
-    col_map = {}
-    for c in df.columns:
-        cl = c.lower()
-        if 'sku' in cl or re.match(r'^[a-z0-9]{5,}$', c.strip()):
-            col_map[c] = 'sku'
-        elif 'rrp' in cl or 'zar' in cl or 'price' in cl or 'incl' in cl:
-            col_map[c] = 'rrp'
-        elif 'description' in cl or 'product' in cl or 'name' in cl:
-            col_map[c] = 'description'
-        elif 'status' in cl or 'ribbon' in cl or 'active' in cl or 'eol' in cl.lower():
-            col_map[c] = 'status'
-
-    df = df.rename(columns=col_map)
-
-    # Ensure required columns
-    if 'sku' not in df.columns or 'rrp' not in df.columns:
-        return {'error': 'Could not detect SKU/RRP columns'}
-
-    if 'description' not in df.columns:
-        df['description'] = ''
-    if 'status' not in df.columns:
-        df['status'] = 'active'
 
     imported = 0
     errors = 0
@@ -282,46 +267,50 @@ def import_rrp_xlsx(filepath: str) -> Dict[str, Any]:
 
         for _, row in df.iterrows():
             try:
-                sku = str(row.get('sku', '')).strip()
-                rrp_val = row.get('rrp', '')
+                sku_raw = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ''
+                desc_raw = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
+                status_raw = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
+                rrp_raw = row.iloc[3]  # RRP is col 3 — stored as string '92999'
 
-                if not sku or sku.lower() in ('nan', 'none', 'sku'):
+                # Skip empty rows
+                if not sku_raw or sku_raw.lower() in ('nan', 'none'):
                     skipped += 1
                     continue
 
-                if pd.isna(rrp_val) or str(rrp_val).strip() in ('', 'nan', 'None'):
+                # Skip section-header rows (ALL CAPS words like DISPLAYS, MACBOOK AIR, etc.)
+                if re.match(r'^[A-Z][A-Z\s\-]+$', sku_raw) and not re.search(r'\d', sku_raw):
                     skipped += 1
                     continue
 
-                # Parse RRP — remove R, spaces, commas
-                rrp_str = str(rrp_val).replace('R', '').replace(' ', '').replace(',', '').strip()
+                # Validate RRP
+                if rrp_raw is None or pd.isna(rrp_raw):
+                    skipped += 1
+                    continue
+                rrp_str = str(rrp_raw).replace('R', '').replace(' ', '').replace(',', '').strip()
                 try:
                     rrp = float(rrp_str)
                     if rrp <= 0:
                         skipped += 1
                         continue
-                except ValueError:
+                except (ValueError, AttributeError):
                     skipped += 1
                     continue
 
-                description = str(row.get('description', '') or '').strip()
-                status = str(row.get('status', 'active') or 'active').strip().lower()
-
                 # Determine ribbon
-                ribbon = 'active'
-                if status in ('eol', 'end of life', 'discontinued', 'obsolete'):
+                status_lc = status_raw.lower()
+                if status_lc in ('eol', 'end of life', 'discontinued', 'obsolete'):
                     ribbon = 'clearance'
-                elif status in ('new', 'launch', 'pre-order'):
+                elif status_lc in ('new', 'launch', 'pre-order'):
                     ribbon = 'new_arrival'
-                elif status == 'active':
-                    ribbon = 'active'
+                elif status_lc in ('low', 'limited'):
+                    ribbon = 'low_stock'
                 else:
                     ribbon = 'active'
 
                 cursor.execute("""
                     INSERT OR REPLACE INTO reference_prices (sku, rrp, rrp_description, source_file)
                     VALUES (?, ?, ?, ?)
-                """, (sku, rrp, description, os.path.basename(filepath)))
+                """, (sku_raw, rrp, desc_raw, os.path.basename(filepath)))
                 imported += 1
 
             except Exception as e:
@@ -332,8 +321,8 @@ def import_rrp_xlsx(filepath: str) -> Dict[str, Any]:
 
     return {
         'imported': imported,
-        'skipped': skipped,
         'errors': errors,
+        'skipped': skipped,
     }
 
 def import_rrp_csv(filepath: str) -> Dict[str, Any]:

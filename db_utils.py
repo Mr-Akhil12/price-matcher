@@ -71,6 +71,12 @@ def init_database():
                 option_2_value TEXT,
                 option_3_name TEXT,
                 option_3_value TEXT,
+                option_4_name TEXT,
+                option_4_value TEXT,
+                option_5_name TEXT,
+                option_5_value TEXT,
+                option_6_name TEXT,
+                option_6_value TEXT,
                 done INTEGER DEFAULT 0,
                 -- NEW FIELDS for v2 matching
                 match_status TEXT DEFAULT 'unmatched',
