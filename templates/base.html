@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Price Matcher v2{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+<script src="https://unpkg.com/htmx.org@1.9.10" defer></script>
+{% block head %}{% endblock %}
+</head>
+<body hx-headers='{"X-Requested-With": "XMLHttpRequest"}'>
+
+<nav class="navbar">
+  <div class="nav-brand">🧾 Price Matcher</div>
+  <div class="nav-links">
+    <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">Dashboard</a>
+    <a href="{{ url_for('match') }}" class="nav-link {% if request.endpoint == 'match' %}active{% endif %}">Match</a>
+    <a href="{{ url_for('review') %}" class="nav-link {% if request.endpoint == 'review' %}active{% endif %}">Review</a>
+    <a href="{{ url_for('export_page') }}" class="nav-link {% if request.endpoint == 'export_page' %}active{% endif %}">Export</a>
+  </div>
+</nav>
+
+<main class="container">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-messages">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+{% block body_end %}{% endblock %}
+</body>
+</html>

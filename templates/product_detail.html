@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }} — Price Matcher{% endblock %}
+
+{% block content %}
+<a href="{{ url_for('review') }}" class="btn btn-secondary btn-sm" style="margin-bottom:1rem">← Back to Review</a>
+
+<div style="display:grid;grid-template-columns:1fr 380px;gap:1.5rem;align-items:start">
+
+  <!-- LEFT: PRODUCT INFO + VARIANTS -->
+  <div style="display:flex;flex-direction:column;gap:1rem">
+
+    <!-- PRODUCT HEADER -->
+    <div class="card">
+      <div style="display:flex;gap:1rem;align-items:flex-start">
+        {% if product.product_image_url %}
+          <img src="{{ product.product_image_url.split(';')[0] }}" style="width:120px;height:90px;object-fit:cover;border-radius:6px;flex-shrink:0" alt="">
+        {% endif %}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:1.1rem;font-weight:700;margin-bottom:0.4rem">{{ product.name }}</div>
+          <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.25rem">
+            <strong>Collection:</strong> {{ product.collection or '—' }} ·
+            <strong>Brand:</strong> {{ product.brand or '—' }}
+          </div>
+          <div style="font-size:0.8rem;color:var(--muted)">
+            <strong>Base Price:</strong> R{{ "%.2f"|format(product.base_price) }} ·
+            <strong>Handle:</strong> {{ product.handle_id }}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BULK ACTIONS -->
+    <div class="card" style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap">
+      <button
+        class="btn btn-success"
+        onclick="
+          fetch('{{ url_for('action_bulk_apply', product_id=product.id) }}', {
+            method:'POST',
+            headers:{'X-Requested-With':'XMLHttpRequest'}
+          }).then(r=>r.json()).then(d=>{
+            this.textContent='Applied '+d.updated+' ✓';
+            this.disabled=true;
+          });
+        "
+      >⚡ Apply All Surcharges</button>
+
+      <button
+        class="btn btn-secondary"
+        onclick="
+          fetch('{{ url_for('action_mark_all_done', product_id=product.id) }}', {
+            method:'POST',
+            headers:{'X-Requested-With':'XMLHttpRequest'}
+          }).then(()=>{this.textContent='Done ✓';this.disabled=true;location.reload()});
+        "
+      >✅ Mark All Reviewed</button>
+
+      <span style="margin-left:auto;font-size:0.8rem;color:var(--muted)">
+        {{ product.variants|length }} variants
+      </span>
+    </div>
+
+    <!-- VARIANTS -->
+    <div class="section-title" style="margin-top:0.5rem">Variants</div>
+
+    {% for variant in variants %}
+    {% set base_price = product.base_price %}
+    {% set current_surcharge = variant.surcharge or 0 %}
+    {% set current_final = base_price + current_surcharge %}
+    {% set ref_price = variant.reference_price %}
+    {% set suggested_surcharge = (ref_price - base_price) if ref_price else 0 %}
+    {% set ref_final = ref_price if ref_price else 0 %}
+    {% set price_diff = ref_final - current_final if ref_price else 0 %}
+
+    <div class="card" id="variant-{{ variant.id }}"
+      style="border-left:3px solid {% if variant.match_status=='guaranteed' %}var(--green){% elif variant.match_status=='believed' %}var(--orange){% else %}var(--border){% endif %}">
+
+      <!-- VARIANT HEADER -->
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:700;font-size:0.95rem">
+            SKU: {{ variant.sku }}
+            {% if variant.option_1_value or variant.option_2_value %}
+              <span style="font-weight:400;color:var(--muted)">
+                · {{ [variant.option_1_value, variant.option_2_value, variant.option_3_value]|select('truthy')|join(' / ') }}
+              </span>
+            {% endif %}
+          </div>
+          <div style="display:flex;gap:0.4rem;margin-top:0.35rem;flex-wrap:wrap">
+            <span class="badge badge-{{ variant.match_status or 'unmatched' }}">
+              {% if variant.match_status == 'guaranteed' %}✓ Guaranteed ({{ (variant.trust_score*100)|round }}%)
+              {% elif variant.match_status == 'believed' %}? Believed ({{ (variant.trust_score*100)|round }}%)
+              {% elif variant.match_status == 'user_approved' %}✓ Approved ({{ (variant.trust_score*100)|round }}%)
+              {% elif variant.match_status == 'unmatched' %}✗ Unmatched
+              {% else %}{{ variant.match_status or 'unmatched' }}{% endif %}
+            </span>
+            <span class="badge badge-{{ variant.ribbon_status or 'active' }}">{{ variant.ribbon_status or 'active' }}</span>
+            {% if variant.done %}
+              <span class="badge" style="background:rgba(88,166,255,0.15);color:var(--signal)">✓ Reviewed</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- DONE TOGGLE -->
+        <form hx-post="{{ url_for('action_done') }}" hx-swap="none" style="display:inline">
+          <input type="hidden" name="variant_id" value="{{ variant.id }}">
+          <input type="hidden" name="done" value="{% if variant.done %}false{% else %}true{% endif %}">
+          <button type="submit" class="btn {% if variant.done %}btn-success{% else %}btn-secondary{% endif %} btn-sm">
+            {% if variant.done %}✓ Reviewed{% else %}Mark Done{% endif %}
+          </button>
+        </form>
+      </div>
+
+      <!-- PRICE BLOCK -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem;margin-top:0.75rem;padding:0.75rem;background:var(--bg);border-radius:6px">
+
+        <!-- CURRENT -->
+        <div>
+          <div class="price-label">Current</div>
+          <div class="price-value neutral">R{{ "%.2f"|format(current_final) }}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">
+            Base R{{ "%.2f"|format(base_price) }} + R{{ "%.2f"|format(current_surcharge) }}
+          </div>
+        </div>
+
+        <!-- RRP TARGET -->
+        {% if ref_price %}
+        <div>
+          <div class="price-label">Target RRP</div>
+          <div class="price-value {% if price_diff > 0.01 %}negative{% elif price_diff < -0.01 %}positive{% else %}neutral{% endif %}">
+            R{{ "%.2f"|format(ref_final) }}
+          </div>
+          <div style="font-size:0.7rem;color:var(--muted)">
+            Suggested surcharge: R{{ "%.2f"|format(suggested_surcharge) }}
+          </div>
+        </div>
+
+        <!-- DIFF -->
+        <div>
+          <div class="price-label">Difference</div>
+          {% if abs(price_diff) <= 0.01 %}
+            <div class="price-value neutral">✓ Matched</div>
+          {% elif price_diff > 0 %}
+            <div class="price-value negative">-R{{ "%.2f"|format(abs(price_diff)) }}</div>
+          {% else %}
+            <div class="price-value positive">+R{{ "%.2f"|format(abs(price_diff)) }}</div>
+          {% endif %}
+          <div style="font-size:0.7rem;color:var(--muted)">vs current</div>
+        </div>
+        {% else %}
+        <div>
+          <div class="price-label">No RRP</div>
+          <div class="price-value neutral">—</div>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- ADJUST SURCHARGE + RIBBON -->
+      <div style="margin-top:0.75rem;display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap">
+
+        <!-- SURCHARGE INPUT -->
+        {% if ref_price %}
+        <div style="flex:1;min-width:160px">
+          <label>Surcharge (R)</label>
+          <div style="display:flex;gap:0.5rem">
+            <input
+              type="number"
+              step="0.01"
+              value="{{ suggested_surcharge|round(2) }}"
+              id="surcharge-{{ variant.id }}"
+              style="flex:1"
+            >
+            <button
+              class="btn btn-primary btn-sm"
+              onclick="
+                var val = document.getElementById('surcharge-{{ variant.id }}').value;
+                fetch('{{ url_for('action_surcharge') }}', {
+                  method:'POST',
+                  body: new URLSearchParams({variant_id:{{ variant.id }}, surcharge:val}),
+                  headers:{'X-Requested-With':'XMLHttpRequest'}
+                }).then(()=>{this.textContent='Saved ✓';setTimeout(()=>this.textContent='Save',2000)});
+              "
+            >Save</button>
+          </div>
+        </div>
+
+        <!-- QUICK MATCH RRP -->
+        {% if abs(current_surcharge - suggested_surcharge) > 0.01 %}
+        <button
+          class="btn btn-success btn-sm"
+          onclick="
+            fetch('{{ url_for('action_surcharge') }}', {
+              method:'POST',
+              body: new URLSearchParams({variant_id:{{ variant.id }}, surcharge:'{{ suggested_surcharge }}'}),
+              headers:{'X-Requested-With':'XMLHttpRequest'}
+            }).then(()=>{this.textContent='Matched ✓';this.disabled=true});
+          "
+        >🎯 Match RRP</button>
+        {% endif %}
+
+        {% endif %}
+
+        <!-- RIBBON SELECT -->
+        <div>
+          <label>Ribbon</label>
+          <select
+            id="ribbon-{{ variant.id }}"
+            onchange="
+              fetch('{{ url_for('action_ribbon') }}', {
+                method:'POST',
+                body: new URLSearchParams({variant_id:{{ variant.id }}, ribbon_status:this.value}),
+                headers:{'X-Requested-With':'XMLHttpRequest'}
+              });
+            "
+            style="min-width:130px"
+          >
+            <option value="active" {% if variant.ribbon_status=='active' %}selected{% endif %}>Active</option>
+            <option value="new_arrival" {% if variant.ribbon_status=='new_arrival' %}selected{% endif %}>New Arrival</option>
+            <option value="low_stock" {% if variant.ribbon_status=='low_stock' %}selected{% endif %}>Low Stock</option>
+            <option value="clearance" {% if variant.ribbon_status=='clearance' %}selected{% endif %}>Clearance</option>
+            <option value="invisible" {% if variant.ribbon_status=='invisible' %}selected{% endif %}>Invisible</option>
+          </select>
+        </div>
+      </div>
+
+    </div>
+    {% endfor %}
+
+  </div>
+
+  <!-- RIGHT: SIDEBAR -->
+  <div style="display:flex;flex-direction:column;gap:1rem;position:sticky;top:1rem">
+
+    <!-- QUICK STATS -->
+    <div class="card">
+      <div class="section-title" style="margin-bottom:0.75rem">Product Stats</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem">
+        <div class="stat-card" style="padding:0.75rem">
+          <div class="stat-value" style="font-size:1.4rem">{{ product.variants|length }}</div>
+          <div class="stat-label">Variants</div>
+        </div>
+        <div class="stat-card" style="padding:0.75rem">
+          <div class="stat-value" style="font-size:1.4rem">
+            {{ variants|selectattr('done')|list|length }}
+          </div>
+          <div class="stat-label">Reviewed</div>
+        </div>
+        <div class="stat-card" style="padding:0.75rem">
+          <div class="stat-value" style="font-size:1.4rem;color:var(--green)">
+            {{ variants|selectattr('match_status','equalto','guaranteed')|list|length +
+               variants|selectattr('match_status','equalto','user_approved')|list|length }}
+          </div>
+          <div class="stat-label">Matched</div>
+        </div>
+        <div class="stat-card" style="padding:0.75rem">
+          <div class="stat-value" style="font-size:1.4rem;color:var(--orange)">
+            {{ variants|selectattr('match_status','equalto','believed')|list|length }}
+          </div>
+          <div class="stat-label">Believed</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MATCH STATUS SUMMARY -->
+    <div class="card">
+      <div class="section-title" style="margin-bottom:0.75rem">Match Breakdown</div>
+      {% for v in variants %}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0;border-bottom:1px solid var(--border);font-size:0.8rem">
+        <span style="color:var(--muted);font-family:monospace">{{ v.sku[:20] }}</span>
+        <span class="badge badge-{{ v.match_status or 'unmatched' }}" style="font-size:0.65rem">
+          {% if v.trust_score > 0 %}{{ (v.trust_score*100)|round }}%{% else %}{{ v.match_status or '—' }}{% endif %}
+        </span>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- MANUAL MATCH -->
+    <div class="card">
+      <div class="section-title" style="margin-bottom:0.5rem">Manual Match</div>
+      <p style="font-size:0.75rem;color:var(--muted);margin-bottom:0.75rem">
+        Assign a different RRP entry to this variant's product.
+      </p>
+      <a href="{{ url_for('match') }}" class="btn btn-secondary btn-sm" style="width:100%;justify-content:center">
+        Go to Match Page →
+      </a>
+    </div>
+
+    <!-- DESCRIPTION -->
+    {% if product.description %}
+    <div class="card">
+      <div class="section-title" style="margin-bottom:0.5rem">Description</div>
+      <div style="font-size:0.8rem;color:var(--muted);max-height:200px;overflow-y:auto">
+        {{ product.description|striptags|truncate(300) }}
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endblock %}

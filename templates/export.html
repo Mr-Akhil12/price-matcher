@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Export — Price Matcher{% endblock %}
+
+{% block content %}
+<div class="section-title">💾 Export Catalog</div>
+
+<!-- STATS -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.products }}</div>
+    <div class="stat-label">Products</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.variants }}</div>
+    <div class="stat-label">Variants</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ match_stats.matched_variants }}</div>
+    <div class="stat-label">Matched</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ ((match_stats.matched_variants / stats.variants * 100) if stats.variants > 0 else 0)|round(1) }}%</div>
+    <div class="stat-label">Match Rate</div>
+  </div>
+</div>
+
+<!-- EXPORT INFO -->
+<div class="card" style="margin-bottom:1rem">
+  <div class="section-title" style="margin-bottom:0.75rem">📋 Export Details</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:1rem">
+    <div>
+      <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;margin-bottom:0.25rem">Format</div>
+      <div style="font-weight:700">CSV (comma-separated)</div>
+    </div>
+    <div>
+      <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;margin-bottom:0.25rem">Columns</div>
+      <div style="font-weight:700">Full Wix Studio schema (58 columns)</div>
+    </div>
+    <div>
+      <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;margin-bottom:0.25rem">Updated Fields</div>
+      <div style="font-weight:700">surcharge + ribbon only</div>
+    </div>
+    <div>
+      <div style="font-size:0.75rem;color:var(--muted);text-transform:uppercase;margin-bottom:0.25rem">Excluded</div>
+      <div style="font-weight:700;color:var(--muted)">user_discarded + invisible</div>
+    </div>
+  </div>
+</div>
+
+<!-- DOWNLOAD -->
+<div class="card" style="text-align:center;padding:2.5rem">
+  <div style="font-size:3rem;margin-bottom:1rem">📦</div>
+  <div style="font-size:1.2rem;font-weight:700;margin-bottom:0.5rem">Ready to Export</div>
+  <p style="font-size:0.85rem;color:var(--muted);margin-bottom:1.5rem;max-width:400px;margin-left:auto;margin-right:auto">
+    The exported CSV contains all products and variants with updated surcharges and ribbon statuses.
+    All other fields remain exactly as in the original Wix catalog format.
+  </p>
+  <a href="{{ url_for('export_download') }}" class="btn btn-primary" style="font-size:1rem;padding:0.8rem 2rem">
+    📥 Download Catalog CSV
+  </a>
+</div>
+
+<!-- PREVIEW TABLE -->
+<div class="card" style="margin-top:1rem">
+  <div class="section-title">Preview (first 5 rows)</div>
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:0.75rem;white-space:nowrap">
+      <thead>
+        <tr style="background:var(--bg)">
+          {% for col in ['handleId','fieldType','name','sku','price','surcharge','ribbon','visible'] %}
+          <th style="padding:0.5rem 0.75rem;text-align:left;color:var(--muted);border-bottom:1px solid var(--border);font-weight:600;text-transform:uppercase;font-size:0.7rem">{{ col }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in preview_rows[:5] %}
+        <tr style="border-bottom:1px solid rgba(48,54,61,0.4)">
+          <td style="padding:0.4rem 0.75rem;font-family:monospace;color:var(--muted)">{{ row.handle_id[:25] }}</td>
+          <td style="padding:0.4rem 0.75rem"><span class="badge badge-{{ 'guaranteed' if row.fieldType=='Product' else 'active' }}" style="font-size:0.65rem">{{ row.fieldType }}</span></td>
+          <td style="padding:0.4rem 0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis">{{ row.name[:40] if row.name else '' }}</td>
+          <td style="padding:0.4rem 0.75rem;font-family:monospace;color:var(--signal)">{{ row.sku or '—' }}</td>
+          <td style="padding:0.4rem 0.75rem">R{{ "%.2f"|format(row.base_price) if row.base_price else '—' }}</td>
+          <td style="padding:0.4rem 0.75rem;font-weight:700">R{{ "%.2f"|format(row.surcharge if row.surcharge is not none else 0) }}</td>
+          <td style="padding:0.4rem 0.75rem"><span class="badge badge-{{ row.ribbon_status or 'active' }}" style="font-size:0.65rem">{{ row.ribbon_status or 'active' }}</span></td>
+          <td style="padding:0.4rem 0.75rem">{{ row.visible or 'true' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

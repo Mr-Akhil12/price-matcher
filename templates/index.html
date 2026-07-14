@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Price Matcher{% endblock %}
+
+{% block content %}
+<div class="section-title">Dashboard</div>
+
+<!-- STATS -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.products }}</div>
+    <div class="stat-label">Products</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.variants }}</div>
+    <div class="stat-label">Variants</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ stats.reference_prices }}</div>
+    <div class="stat-label">RRP Prices</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ match_stats.match_rate }}%</div>
+    <div class="stat-label">Match Rate</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ match_stats.guaranteed }}</div>
+    <div class="stat-label">Guaranteed</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ match_stats.believed }}</div>
+    <div class="stat-label">Believed</div>
+  </div>
+</div>
+
+<!-- IMPORT SECTION -->
+<div class="grid-2">
+  <!-- Import Catalog -->
+  <div class="card">
+    <div class="section-title" style="margin-bottom:0.5rem">📥 Import Catalog CSV</div>
+    <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem">
+      Upload your Wix Studio catalog export (CSV). This populates products and variants.
+    </p>
+    <form action="{{ url_for('import_catalog') }}" method="POST" enctype="multipart/form-data">
+      <div class="upload-zone" onclick="document.getElementById('catalog-input').click()">
+        <input type="file" id="catalog-input" name="catalog_file" accept=".csv" onchange="this.form.submit()">
+        <div style="font-size:0.875rem;color:var(--muted)">
+          Drop CSV or click to upload
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- Import RRP -->
+  <div class="card">
+    <div class="section-title" style="margin-bottom:0.5rem">📋 Import RRP Pricelist</div>
+    <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem">
+      Upload your Core Group Apple Reseller Program XLSX or CSV. This provides target RRP prices.
+    </p>
+    <form action="{{ url_for('import_rrp') }}" method="POST" enctype="multipart/form-data">
+      <div class="upload-zone" onclick="document.getElementById('rrp-input').click()">
+        <input type="file" id="rrp-input" name="rrp_file" accept=".csv,.xlsx" onchange="this.form.submit()">
+        <div style="font-size:0.875rem;color:var(--muted)">
+          Drop XLSX/CSV or click to upload
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- QUICK ACTIONS -->
+<div class="card" style="margin-top:1rem">
+  <div class="section-title" style="margin-bottom:0.75rem">⚡ Quick Actions</div>
+  <div class="form-row">
+    <a href="{{ url_for('match') }}" class="btn btn-secondary">🔗 Run Matching Engine</a>
+    <a href="{{ url_for('review') }}" class="btn btn-secondary">🔍 Review Products</a>
+    <a href="{{ url_for('export_page') }}" class="btn btn-secondary">💾 Export Catalog</a>
+    <form action="{{ url_for('admin_clear') }}" method="POST" onsubmit="return confirm('Clear all data? This cannot be undone.')" style="display:inline">
+      <button type="submit" class="btn btn-danger">🗑️ Clear Database</button>
+    </form>
+  </div>
+</div>
+
+<!-- RECENT PRODUCTS -->
+{% if products %}
+<div style="margin-top:1.5rem">
+  <div class="section-title">Recent Products</div>
+  <div class="grid-3">
+    {% for p in products %}
+    <a href="{{ url_for('product_detail', product_id=p.id) }}" class="card product-card">
+      {% if p.product_image_url %}
+        <img src="{{ p.product_image_url.split(';')[0] }}" class="card-image" alt="{{ p.name }}">
+      {% else %}
+        <div class="card-image placeholder">No image</div>
+      {% endif %}
+      <div class="card-header">
+        <div>
+          <div class="card-title">{{ p.name[:60] }}{% if p.name|length > 60 %}…{% endif %}</div>
+          <div class="card-subtitle">{{ p.collection or 'No collection' }} · {{ p.variant_count }} variants</div>
+        </div>
+        <span class="badge badge-{{ p.primary_ribbon or 'active' }}">{{ p.primary_ribbon or 'active' }}</span>
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <span class="badge badge-guaranteed">{{ p.matched_variants }} ✓</span>
+        {% if p.believed_variants > 0 %}
+          <span class="badge badge-believed">{{ p.believed_variants }} ?</span>
+        {% endif %}
+        {% if p.unmatched_variants > 0 %}
+          <span class="badge badge-unmatched">{{ p.unmatched_variants }} ✗</span>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  <div style="margin-top:1rem;text-align:center">
+    <a href="{{ url_for('review') }}" class="btn btn-secondary">View all products →</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

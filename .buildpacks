@@ -1,0 +1,3 @@
+[buildpack "heroku/go"]
+
+[buildpack "heroku/python"]

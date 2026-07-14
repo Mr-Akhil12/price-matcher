@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Review Products — Price Matcher{% endblock %}
+
+{% block content %}
+<div class="section-title">🔍 Review Products</div>
+
+<!-- FILTER BAR -->
+<form method="GET" action="{{ url_for('review') }}" class="filter-bar" id="filter-form">
+  <input type="text" name="search" placeholder="Search SKU, name, description…" value="{{ search }}" hx-get="{{ url_for('review') }}" hx-include="[name='match_filter'],[name='collection'],[name='ribbon_filter']" hx-trigger="keyup changed delay:300ms" hx-replace-url="true">
+  
+  <select name="match_filter" onchange="document.getElementById('filter-form').requestSubmit()">
+    <option value="all" {% if match_filter=='all' %}selected{% endif %}>All Match Status</option>
+    <option value="guaranteed" {% if match_filter=='guaranteed' %}selected{% endif %}>Guaranteed</option>
+    <option value="believed" {% if match_filter=='believed' %}selected{% endif %}>Believed</option>
+    <option value="unmatched" {% if match_filter=='unmatched' %}selected{% endif %}>Unmatched</option>
+    <option value="user_approved" {% if match_filter=='user_approved' %}selected{% endif %}>User Approved</option>
+  </select>
+  
+  <select name="collection" onchange="document.getElementById('filter-form').requestSubmit()">
+    <option value="all">All Collections</option>
+    {% for col in collections %}
+      <option value="{{ col }}" {% if collection_filter==col %}selected{% endif %}>{{ col }}</option>
+    {% endfor %}
+  </select>
+
+  <select name="ribbon_filter" onchange="document.getElementById('filter-form').requestSubmit()">
+    <option value="all" {% if ribbon_filter=='all' %}selected{% endif %}>All Ribbons</option>
+    <option value="active" {% if ribbon_filter=='active' %}selected{% endif %}>Active</option>
+    <option value="new_arrival" {% if ribbon_filter=='new_arrival' %}selected{% endif %}>New Arrival</option>
+    <option value="low_stock" {% if ribbon_filter=='low_stock' %}selected{% endif %}>Low Stock</option>
+    <option value="clearance" {% if ribbon_filter=='clearance' %}selected{% endif %}>Clearance</option>
+    <option value="invisible" {% if ribbon_filter=='invisible' %}selected{% endif %}>Invisible</option>
+  </select>
+
+  <a href="{{ url_for('review') }}" class="btn btn-secondary btn-sm">Clear</a>
+
+  <div style="margin-left:auto;display:flex;gap:0.5rem;align-items:center">
+    <span style="font-size:0.8rem;color:var(--muted)">{{ total }} products</span>
+    <button type="submit" formaction="{{ url_for('action_bulk_apply_all') }}" class="btn btn-success btn-sm">⚡ Apply All Surcharges</button>
+  </div>
+</form>
+
+<!-- PRODUCT CARD GRID -->
+{% if products %}
+<div class="grid-3">
+  {% for p in products %}
+  <a href="{{ url_for('product_detail', product_id=p.id) }}" class="card product-card">
+    {% if p.product_image_url %}
+      <img src="{{ p.product_image_url.split(';')[0] }}" class="card-image" alt="{{ p.name }}" loading="lazy">
+    {% else %}
+      <div class="card-image placeholder">No image</div>
+    {% endif %}
+
+    <div class="card-header">
+      <div>
+        <div class="card-title">{{ p.name[:65] }}{% if p.name|length > 65 %}…{% endif %}</div>
+        <div class="card-subtitle">{{ p.collection or 'No collection' }} · {{ p.base_price }}</div>
+      </div>
+      <span class="badge badge-{{ p.primary_ribbon or 'active' }}">{{ p.primary_ribbon or 'active' }}</span>
+    </div>
+
+    <!-- Match status row -->
+    <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+      <span class="badge badge-guaranteed">
+        ✓ {{ p.matched_variants }} guaranteed
+      </span>
+      {% if p.believed_variants > 0 %}
+        <span class="badge badge-believed">
+          ? {{ p.believed_variants }} believed
+        </span>
+      {% endif %}
+      {% if p.unmatched_variants > 0 %}
+        <span class="badge badge-unmatched">
+          ✗ {{ p.unmatched_variants }} unmatched
+        </span>
+      {% endif %}
+    </div>
+
+    <!-- Progress bar -->
+    {% if p.total_variants > 0 %}
+    <div style="height:4px;background:var(--border);border-radius:2px;overflow:hidden">
+      <div style="height:100%;width:{{ (p.done_variants / p.total_variants * 100)|round }}%;background:var(--signal);border-radius:2px;transition:width 0.3s"></div>
+    </div>
+    {% endif %}
+
+    <div style="font-size:0.75rem;color:var(--muted)">
+      {{ p.total_variants }} variants · {{ p.done_variants }} reviewed
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+<!-- PAGINATION -->
+{% if pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+    <a href="{{ url_for('review', page=page-1, search=search, match_filter=match_filter, collection=collection_filter, ribbon_filter=ribbon_filter) }}">← Prev</a>
+  {% endif %}
+  {% for p in range(1, pages+1) %}
+    {% if p >= page-2 and p <= page+2 %}
+      {% if p == page %}
+        <span class="current">{{ p }}</span>
+      {% else %}
+        <a href="{{ url_for('review', page=p, search=search, match_filter=match_filter, collection=collection_filter, ribbon_filter=ribbon_filter) }}">{{ p }}</a>
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  {% if page < pages %}
+    <a href="{{ url_for('review', page=page+1, search=search, match_filter=match_filter, collection=collection_filter, ribbon_filter=ribbon_filter) }}">Next →</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card" style="text-align:center;padding:3rem">
+  <div style="font-size:2rem;margin-bottom:1rem">🔍</div>
+  <div style="color:var(--muted);font-size:0.9rem">No products match your filters</div>
+  <a href="{{ url_for('review') }}" class="btn btn-secondary" style="margin-top:1rem">Clear Filters</a>
+</div>
+{% endif %}
+{% endblock %}

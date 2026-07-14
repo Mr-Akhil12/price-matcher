@@ -1,0 +1,21 @@
+database:
+  name: product_matcher
+  databaseName: product_matcher
+  plan: free
+
+services:
+  - type: web
+    name: product-price-matcher
+    env: python
+    region: cape-town
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --threads 4
+    healthCheckPath: /
+    envVars:
+      - key: DATA_DIR
+        value: /data
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1

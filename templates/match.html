@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Match — Price Matcher{% endblock %}
+
+{% block content %}
+<div class="section-title">🔗 Match Products</div>
+
+<!-- MATCH STATS -->
+<div class="stats-row">
+  <div class="stat-card">
+    <div class="stat-value">{{ match_stats.total_variants }}</div>
+    <div class="stat-label">Total Variants</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--green)">{{ match_stats.guaranteed }}</div>
+    <div class="stat-label">Guaranteed</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--orange)">{{ match_stats.believed }}</div>
+    <div class="stat-label">Believed</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--muted)">{{ match_stats.unmatched }}</div>
+    <div class="stat-label">Unmatched</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ match_stats.match_rate }}%</div>
+    <div class="stat-label">Match Rate</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value">{{ match_stats.matched_reference_prices }}/{{ match_stats.total_reference_prices }}</div>
+    <div class="stat-label">RRP Used</div>
+  </div>
+</div>
+
+<!-- RUN MATCHING -->
+<div class="card">
+  <div class="section-title" style="margin-bottom:0.75rem">⚡ Intelligent Matching</div>
+  <p style="font-size:0.85rem;color:var(--muted);margin-bottom:1rem">
+    The matching engine compares each variant SKU against the RRP pricelist.
+    <strong style="color:var(--green)">Guaranteed</strong> matches are exact SKU hits (trust 1.0).
+    <strong style="color:var(--orange)">Believed</strong> matches are fuzzy matches on product name + specs (trust 0.55–0.95).
+    Unmatched variants have no corresponding RRP entry.
+  </p>
+  <form action="{{ url_for('run_match') }}" method="POST">
+    <button type="submit" class="btn btn-primary">🚀 Run Full Match</button>
+  </form>
+</div>
+
+<!-- UNMATCHED RRP ENTRIES -->
+<div style="margin-top:1.5rem">
+  <div class="section-title">⚠️ Unmatched RRP Entries ({{ match_stats.total_reference_prices - match_stats.matched_reference_prices }})</div>
+  <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem">
+    These RRP entries have no matching variant in your catalog. Use manual matching on the Review page to pair them.
+  </p>
+
+  <div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius)">
+    <table style="width:100%;border-collapse:collapse;font-size:0.8rem">
+      <thead style="position:sticky;top:0;background:var(--panel);z-index:1">
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="padding:0.6rem 1rem;text-align:left;color:var(--muted)">SKU</th>
+          <th style="padding:0.6rem 1rem;text-align:left;color:var(--muted)">Description</th>
+          <th style="padding:0.6rem 1rem;text-align:right;color:var(--muted)">RRP (ZAR)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rp in unmatched_rrps %}
+        <tr style="border-bottom:1px solid rgba(48,54,61,0.5)">
+          <td style="padding:0.5rem 1rem;font-weight:600;color:var(--signal)">{{ rp.sku }}</td>
+          <td style="padding:0.5rem 1rem;color:var(--muted)">{{ rp.rrp_description[:80] if rp.rrp_description else '—' }}</td>
+          <td style="padding:0.5rem 1rem;text-align:right;font-weight:700">R{{ "%.2f"|format(rp.rrp) }}</td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="3" style="padding:1.5rem;text-align:center;color:var(--muted)">All RRP entries matched ✓</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div style="margin-top:1.5rem">
+  <a href="{{ url_for('review') }}" class="btn btn-success">✅ Proceed to Review Products →</a>
+</div>
+{% endblock %}
