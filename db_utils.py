@@ -92,36 +92,45 @@ if USE_TURSO:
         def columns(self):
             return [c['name'] for c in self._result.get('response', {}).get('result', {}).get('cols', [])]
 
+    _http_client = None
+
+    def _get_client():
+        global _http_client
+        if _http_client is None:
+            _http_client = httpx.Client(base_url=f'https://{_parsed.netloc}', headers=_headers, timeout=30.0)
+        return _http_client
+
     @contextmanager
     def get_db_connection():
-        """Context manager using Turso HTTP API (no WebSocket required)."""
-        with httpx.Client(base_url=f'https://{_parsed.netloc}', headers=_headers, timeout=30.0) as client:
-            baton = [None]  # mutable holder for transaction baton
+        """Context manager using persistent Turso HTTP client."""
+        client = _get_client()
+        baton = [None]
 
-            def execute(sql, params=None):
-                params = list(params) if params else []
-                def _arg(p):
-                    if p is None: return {'type': 'null', 'value': None}
-                    if isinstance(p, bool): return {'type': 'integer', 'value': '1' if p else '0'}
-                    if isinstance(p, int): return {'type': 'integer', 'value': str(p)}
-                    if isinstance(p, float): return {'type': 'real', 'value': str(p)}
-                    return {'type': 'text', 'value': str(p)}
-                payload = {
-                    'requests': [{
-                        'type': 'execute',
-                        'stmt': {'sql': sql, 'args': [_arg(p) for p in params]}
-                    }]
-                }
-                if baton[0]:
-                    payload['baton'] = baton[0]
-                resp = client.post('/v2/pipeline', json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                baton[0] = data.get('baton')
-                return TursoResult(data)
+        def execute(sql, params=None):
+            params = list(params) if params else []
+            def _arg(p):
+                if p is None: return {'type': 'null', 'value': None}
+                if isinstance(p, bool): return {'type': 'integer', 'value': '1' if p else '0'}
+                if isinstance(p, int): return {'type': 'integer', 'value': str(p)}
+                if isinstance(p, float): return {'type': 'real', 'value': str(p)}
+                return {'type': 'text', 'value': str(p)}
+            payload = {
+                'requests': [{
+                    'type': 'execute',
+                    'stmt': {'sql': sql, 'args': [_arg(p) for p in params]}
+                }]
+            }
+            if baton[0]:
+                payload['baton'] = baton[0]
+            resp = client.post('/v2/pipeline', json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            baton[0] = data.get('baton')
+            return TursoResult(data)
 
-            yield _TursoConn(execute)
-            baton[0] = None
+        conn = _TursoConn(execute)
+        yield conn
+        baton[0] = None
 
     class _TursoConn:
         """Connection-like object returned by get_db_connection.

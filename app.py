@@ -38,9 +38,14 @@ os.makedirs(os.path.join(DATA_DIR, 'exports'), exist_ok=True)
 
 # ─── INIT ────────────────────────────────────────────────────────────────────
 
+_db_initialized = False
+
 @app.before_request
-def before():
-    init_database()
+def ensure_db():
+    global _db_initialized
+    if not _db_initialized:
+        init_database()
+        _db_initialized = True
 
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
 
